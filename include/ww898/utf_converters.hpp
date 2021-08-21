@@ -38,6 +38,18 @@
 namespace ww898 {
 namespace utf {
 
+template<
+    typename It>
+struct convert_error : std::runtime_error
+{
+    It where;
+
+    convert_error(const std::runtime_error &what, It where_)
+        : std::runtime_error(what), where(where_)
+    {
+    }
+};
+
 namespace detail {
 
 enum struct convz_impl { normal, binary_copy };
@@ -50,16 +62,22 @@ template<
     convz_impl>
 struct convz_strategy
 {
-    Oit operator()(It it, Oit oit) const
+    Oit operator()(It begin, Oit oit) const
     {
-        auto const read_fn = [&it] { return *it++; };
-        auto const write_fn = [&oit] (typename Outf::char_type const ch) { *oit++ = ch; };
-        while (true)
-        {
-            auto const cp = Utf::read(read_fn);
-            if (!cp)
-                return oit;
-            Outf::write(cp, write_fn);
+        auto it = begin, chunk_it = begin;
+        try {
+            auto const read_fn = [&it] { return *it++; };
+            auto const write_fn = [&oit] (typename Outf::char_type const ch) { *oit++ = ch; };
+            while (true)
+            {
+                auto const cp = Utf::read(read_fn);
+                if (!cp)
+                    return oit;
+                Outf::write(cp, write_fn);
+                chunk_it = it;
+            }
+        } catch (std::runtime_error &e) {
+            throw convert_error<It>(e, chunk_it);
         }
     }
 };
@@ -71,14 +89,20 @@ template<
     typename Oit>
 struct convz_strategy<Utf, Outf, It, Oit, convz_impl::binary_copy>
 {
-    Oit operator()(It it, Oit oit) const
+    Oit operator()(It begin, Oit oit) const
     {
-        while (true)
-        {
-            auto const ch = *it++;
-            if (!ch)
-                return oit;
-            *oit++ = ch;
+        auto it = begin, chunk_it = begin;
+        try {
+            while (true)
+            {
+                auto const ch = *it++;
+                if (!ch)
+                    return oit;
+                *oit++ = ch;
+                chunk_it = it;
+            }
+        } catch (std::runtime_error &e) {
+            throw convert_error<It>(e, chunk_it);
         }
     }
 };
@@ -114,8 +138,10 @@ template<
     conv_impl>
 struct conv_strategy final
 {
-    Oit operator()(It it, It const eit, Oit oit) const
+    Oit operator()(It begin, It const eit, Oit oit) const
     {
+        auto it = begin, chunk_it = begin;
+
         auto const read_fn = [&it, &eit]
             {
                 if (it == eit)
@@ -123,8 +149,15 @@ struct conv_strategy final
                 return *it++;
             };
         auto const write_fn = [&oit] (typename Outf::char_type const ch) { *oit++ = ch; };
-        while (it != eit)
-            Outf::write(Utf::read(read_fn), write_fn);
+
+        try {
+            while (it != eit) {
+                Outf::write(Utf::read(read_fn), write_fn);
+                chunk_it = it;
+            }
+        } catch (std::runtime_error &e) {
+            throw convert_error<It>(e, chunk_it);
+        }
         return oit;
     }
 };
@@ -136,15 +169,23 @@ template<
     typename Oit>
 struct conv_strategy<Utf, Outf, It, Oit, conv_impl::random_interator> final
 {
-    Oit operator()(It it, It const eit, Oit oit) const
+    Oit operator()(It begin, It const eit, Oit oit) const
     {
+        auto it = begin;
         auto const write_fn = [&oit] (typename Outf::char_type const ch) { *oit++ = ch; };
         if (eit - it >= static_cast<typename std::iterator_traits<It>::difference_type>(Utf::max_supported_symbol_size))
         {
             auto const fast_read_fn = [&it] { return *it++; };
             auto const fast_eit = eit - Utf::max_supported_symbol_size;
-            while (it < fast_eit)
-                Outf::write(Utf::read(fast_read_fn), write_fn);
+            auto chunk_it = it;
+            try {
+                while (it < fast_eit) {
+                    Outf::write(Utf::read(fast_read_fn), write_fn);
+                    chunk_it = it;
+                }
+            } catch (std::runtime_error &e) {
+                throw convert_error<It>(e, chunk_it);
+            }
         }
         auto const read_fn = [&it, &eit]
             {
@@ -152,8 +193,16 @@ struct conv_strategy<Utf, Outf, It, Oit, conv_impl::random_interator> final
                     throw std::runtime_error("Not enough input");
                 return *it++;
             };
-        while (it != eit)
-            Outf::write(Utf::read(read_fn), write_fn);
+
+        auto chunk_it = it;
+        try {
+            while (it != eit) {
+                Outf::write(Utf::read(read_fn), write_fn);
+                chunk_it = it;
+            }
+        } catch (std::runtime_error &e) {
+            throw convert_error<It>(e, chunk_it);
+        }
         return oit;
     }
 };
@@ -165,10 +214,18 @@ template<
     typename Oit>
 struct conv_strategy<Utf, Outf, It, Oit, conv_impl::binary_copy> final
 {
-    Oit operator()(It it, It const eit, Oit oit) const
+    Oit operator()(It begin, It const eit, Oit oit) const
     {
-        while (it != eit)
-            *oit++ = *it++;
+        auto it = begin, chunk_it = begin;
+        try {
+            while (it != eit) {
+                *oit++ = *it++;
+                chunk_it = it;
+            }
+        } catch (std::runtime_error &e) {
+            throw convert_error<It>(e, chunk_it);
+        }
+
         return oit;
     }
 };
